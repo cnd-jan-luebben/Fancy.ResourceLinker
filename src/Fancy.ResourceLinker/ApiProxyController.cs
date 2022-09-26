@@ -1,5 +1,8 @@
 ﻿using Fancy.ResourceLinker.Json;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Net.Http.Headers;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -7,6 +10,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using JsonSerializer = System.Text.Json.JsonSerializer;
 
 namespace Fancy.ResourceLinker
 {
@@ -88,10 +92,39 @@ namespace Fancy.ResourceLinker
 
             if (HttpContext.Request.ContentLength > 0)
             {
-                using (StreamReader reader = new StreamReader(HttpContext.Request.Body))
+                if (HttpContext.Request.HasFormContentType &&
+                    MediaTypeHeaderValue.TryParse(HttpContext.Request.ContentType, out var mediaTypeHeader) &&
+                    !string.IsNullOrEmpty(mediaTypeHeader.Boundary.Value))
                 {
-                    string content = await reader.ReadToEndAsync();
-                    proxyRequest.Content = new StringContent(content, Encoding.UTF8, HttpContext.Request.ContentType);
+                    var reader = new MultipartReader(mediaTypeHeader.Boundary.Value, HttpContext.Request.Body);
+                    var section = await reader.ReadNextSectionAsync();
+                    var mpContent = new MultipartFormDataContent(mediaTypeHeader.Boundary.Value);
+                    while (section != null)
+                    {
+                        var hasContentDispositionHeader = ContentDispositionHeaderValue.TryParse(section.ContentDisposition,
+                            out var contentDisposition);
+
+                        if (hasContentDispositionHeader && contentDisposition.DispositionType.Equals("form-data") &&
+                            !string.IsNullOrEmpty(contentDisposition.FileName.Value))
+                        {
+                            MemoryStream ms = new MemoryStream();
+                            await section.Body.CopyToAsync(ms);
+                            ms.Seek(0, SeekOrigin.Begin);
+                            var content = new StreamContent(ms);
+                            content.Headers.Add("Content-Disposition", section.ContentDisposition);
+                            mpContent.Add(content);
+                        }
+                        section = await reader.ReadNextSectionAsync();
+                    }
+                    proxyRequest.Content = mpContent;
+                }
+                else
+                {
+                    using (StreamReader reader = new StreamReader(HttpContext.Request.Body))
+                    {
+                        string content = await reader.ReadToEndAsync();
+                        proxyRequest.Content = new StringContent(content, Encoding.UTF8, HttpContext.Request.ContentType);
+                    }
                 }
             }
 
@@ -131,7 +164,6 @@ namespace Fancy.ResourceLinker
                 {
                     string content = "Internal Error from Microservice with no detailed error message.";
                     return new ContentResult { StatusCode = 500, Content = content, ContentType = "text" };
-
                 }
             }
         }
