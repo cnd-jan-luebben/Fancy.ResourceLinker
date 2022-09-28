@@ -59,7 +59,7 @@ namespace Fancy.ResourceLinker
             if (responseMessage.StatusCode == System.Net.HttpStatusCode.OK)
             {
                 string jsonResponse = await responseMessage.Content.ReadAsStringAsync();
-                return JsonSerializer.Deserialize<TResource>(jsonResponse, _serializerOptions);
+                return JsonConvert.DeserializeObject<TResource>(jsonResponse);
             }
             else
             {
